@@ -1,0 +1,5 @@
+node_modules
+.env
+data/songs.json
+media/videos/*
+!media/videos/.gitkeep
