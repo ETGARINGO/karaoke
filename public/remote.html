@@ -1,0 +1,23 @@
+<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>KARAOKE PRO - Remote</title>
+<style>body{margin:0;background:#080b1a;color:#fff;font:18px system-ui;padding:12px}h1{margin:0 0 8px;text-shadow:0 0 12px #0ff}
+input,button{font-size:1.1rem;padding:14px;border-radius:14px;border:0;margin:4px 0}input{width:100%;box-sizing:border-box;background:#fff2;color:#fff}
+button{background:#0bd;color:#001;font-weight:700;min-width:56px}.row{display:flex;gap:6px}.row button{flex:1}
+.card{background:#ffffff14;border-radius:14px;padding:12px;margin:6px 0;display:flex;justify-content:space-between;align-items:center;gap:8px}
+small{opacity:.7}#toast{position:fixed;bottom:12px;left:12px;right:12px;background:#0bd;color:#001;padding:12px;border-radius:12px;display:none;text-align:center}</style>
+<h1>KARAOKE PRO</h1><small id=rm></small>
+<div class=row><button aria-label=Play onclick="c('play')">▶</button><button aria-label=Pause onclick="c('pause')">⏸</button><button aria-label=Restart onclick="c('restart')">⟲</button><button aria-label=Next onclick="c('next')">⏭</button><button aria-label="Volume down" onclick="v(-.1)">🔉</button><button aria-label="Volume up" onclick="v(.1)">🔊</button></div>
+<input id=singer placeholder="SINGER NAME" aria-label="Singer name">
+<input id=q placeholder="Search title, artist, or code (K000001)" aria-label=Search>
+<div id=res></div><h3>Now / Queue</h3><div id=queue></div><div id=toast></div>
+<script src=/socket.io/socket.io.js></script><script>
+const room=location.pathname.split('/').pop(),s=io();let st={volume:.8};rm.textContent='Room '+room;s.emit('join',room);
+const esc=x=>String(x).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const c=(action,extra={})=>s.emit('ctl',{action,...extra}),v=d=>c('volume',{value:st.volume+d});
+s.on('state',n=>{st=n;queue.innerHTML=(n.current?`<div class=card><div><b>NOW: ${esc(n.current.singer)}</b><br>${esc(n.current.song.title)}</div></div>`:'<small>Nothing playing</small>')+
+ n.queue.map(i=>`<div class=card><div>${esc(i.singer)} — ${esc(i.song.title)}</div><div><button aria-label="Move up" onclick="c('up',{itemId:${i.id}})">↑</button> <button aria-label=Remove onclick="c('remove',{itemId:${i.id}})">✕</button></div></div>`).join('')});
+s.on('toast',m=>{toast.textContent=m;toast.style.display='block';setTimeout(()=>toast.style.display='none',2000)});
+let tm;async function search(){const r=await(await fetch('/api/songs?limit=20&q='+encodeURIComponent(q.value))).json();
+ res.innerHTML=r.items.map(x=>`<div class=card><div><b>${esc(x.title)}</b><br><small>${esc(x.artist)} · ${esc(x.code)}${x.hasMedia?'':' · lyrics-only demo'}</small></div><button onclick="add('${esc(x.code)}')">Add</button></div>`).join('')||'<small>No results</small>'}
+q.oninput=()=>{clearTimeout(tm);tm=setTimeout(search,250)};search();
+const add=code=>{if(!singer.value.trim())return singer.focus();s.emit('add',{code,singer:singer.value})};
+</script>

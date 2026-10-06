@@ -1,0 +1,56 @@
+const express=require('express'),http=require('http'),fs=require('fs'),path=require('path');
+const {Server}=require('socket.io');
+const app=express(),srv=http.createServer(app),io=new Server(srv);
+const ADMIN=process.env.ADMIN_TOKEN||'admin123';
+const FILE=path.join(__dirname,'../data/songs.json');
+const MEDIA=path.join(__dirname,'../media/videos');
+const mkLyrics=t=>Array.from({length:8},(_,i)=>({start:i*4,end:i*4+4,text:`DEMO lyric line ${i+1} - ${t}`}));
+const A=['Demo Band','Sample Singers','Test Trio','Public Domain Choir','Mock Star'];
+const G=['Pop','Rock','Ballad','OPM','Party'];
+let songs=Array.from({length:20},(_,i)=>{const t=`Demo Song ${i+1}`;return{code:'K'+String(i+1).padStart(6,'0'),title:t,artist:A[i%5],genre:G[i%4],language:i%3?'English':'Filipino',year:1990+i,duration:32,lyrics:mkLyrics(t)}});
+try{songs=JSON.parse(fs.readFileSync(FILE,'utf8'))}catch{}
+const save=()=>fs.writeFileSync(FILE,JSON.stringify(songs,null,1));
+const pub=s=>({...s,hasMedia:fs.existsSync(path.join(MEDIA,s.code+'.mp4'))});
+const find=c=>songs.find(s=>s.code===String(c).toUpperCase());
+app.use(express.json());
+app.use('/media',express.static(MEDIA));
+app.use(express.static(path.join(__dirname,'../public')));
+app.get('/api/songs',(req,res)=>{const q=String(req.query.q||'').toLowerCase();
+ const r=songs.filter(s=>!q||[s.code,s.title,s.artist,s.genre,s.language,s.year].join(' ').toLowerCase().includes(q));
+ const off=+req.query.offset||0,lim=Math.min(+req.query.limit||20,100);
+ res.json({total:r.length,items:r.slice(off,off+lim).map(pub)})});
+app.get('/api/songs/code/:code',(req,res)=>{const s=find(req.params.code);s?res.json(pub(s)):res.status(404).json({error:'Song not found'})});
+app.post('/api/admin/songs',(req,res)=>{
+ if(req.get('x-admin-token')!==ADMIN)return res.status(401).json({error:'Unauthorized'});
+ const b=req.body||{};if(!b.title||!b.artist)return res.status(400).json({error:'title and artist required'});
+ const code=(b.code||'K'+String(songs.length+1).padStart(6,'0')).toUpperCase();
+ if(find(code))return res.status(409).json({error:'Duplicate code'});
+ const s={code,title:String(b.title),artist:String(b.artist),genre:b.genre||'Other',language:b.language||'English',year:+b.year||null,duration:+b.duration||180,lyrics:Array.isArray(b.lyrics)?b.lyrics:[]};
+ songs.push(s);save();res.status(201).json(pub(s))});
+app.put('/api/admin/media/:code',(req,res)=>{
+ if(req.get('x-admin-token')!==ADMIN)return res.status(401).json({error:'Unauthorized'});
+ const s=find(req.params.code);if(!s)return res.status(404).json({error:'Song not found'});
+ const out=fs.createWriteStream(path.join(MEDIA,s.code+'.mp4'));req.pipe(out);out.on('finish',()=>res.json({ok:true}))});
+app.get('/display/:room',(_,r)=>r.sendFile(path.join(__dirname,'../public/display.html')));
+app.get('/remote/:room',(_,r)=>r.sendFile(path.join(__dirname,'../public/remote.html')));
+const rooms={};let uid=1;
+const room=id=>rooms[id]||(rooms[id]={queue:[],current:null,playing:false,volume:0.8,devices:0});
+const push=id=>io.to(id).emit('state',room(id));
+const advance=r=>{r.current=r.queue.shift()||null;r.playing=!!r.current};
+io.on('connection',sock=>{let id=null;
+ sock.on('join',rid=>{id=String(rid).slice(0,32).replace(/[^\w-]/g,'')||'ROOM001';sock.join(id);room(id).devices++;push(id)});
+ sock.on('disconnect',()=>{if(id){room(id).devices--;push(id)}});
+ sock.on('add',({code,singer}={})=>{if(!id)return;const s=find(code);if(!s)return sock.emit('toast','Song code not found');
+  const r=room(id);const item={id:uid++,singer:String(singer||'GUEST').slice(0,24).toUpperCase(),song:pub(s)};
+  r.current?r.queue.push(item):(r.current=item,r.playing=true);push(id);io.to(id).emit('toast',`Added: ${s.title}`)});
+ sock.on('ctl',({action,itemId,value}={})=>{if(!id)return;const r=room(id);
+  if(action==='play')r.playing=!!r.current;
+  else if(action==='pause')r.playing=false;
+  else if(action==='next'||action==='ended')advance(r);
+  else if(action==='remove')r.queue=r.queue.filter(q=>q.id!==itemId);
+  else if(action==='up'){const i=r.queue.findIndex(q=>q.id===itemId);if(i>0)[r.queue[i-1],r.queue[i]]=[r.queue[i],r.queue[i-1]]}
+  else if(action==='volume')r.volume=Math.max(0,Math.min(1,+value||0));
+  else if(action==='restart')io.to(id).emit('restart');
+  push(id)})});
+if(require.main===module)srv.listen(process.env.PORT||3000,()=>console.log('KARAOKE PRO on :'+(process.env.PORT||3000)));
+module.exports={app,srv,io};
